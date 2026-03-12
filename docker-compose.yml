@@ -1,0 +1,101 @@
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n_automation
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # n8n basic config
+      - N8N_HOST=${N8N_DOMAIN:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - WEBHOOK_URL=${N8N_PROTOCOL:-http}://${N8N_DOMAIN:-localhost}:5678
+
+      # Database - Supabase PostgreSQL
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=${SUPABASE_DB_HOST}
+      - DB_POSTGRESDB_PORT=${SUPABASE_DB_PORT:-6543}
+      - DB_POSTGRESDB_DATABASE=${SUPABASE_DB_NAME:-postgres}
+      - DB_POSTGRESDB_USER=${SUPABASE_DB_USER}
+      - DB_POSTGRESDB_PASSWORD=${SUPABASE_DB_PASSWORD}
+      - DB_POSTGRESDB_SCHEMA=${SUPABASE_DB_SCHEMA:-n8n}
+      - DB_POSTGRESDB_SSL_ENABLED=true
+      - DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false
+
+      # Encryption key for credentials
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # Optional: basic auth
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-false}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-changeme}
+
+      # Timezone
+      - GENERIC_TIMEZONE=${TIMEZONE:-Asia/Jakarta}
+      - TZ=${TIMEZONE:-Asia/Jakarta}
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  # ─── Redash ───────────────────────────────────────────────────────────
+  # ─── Redash ───────────────────────────────────────────────────────────
+  # DB: Supabase PostgreSQL (same as n8n, separate schema: redash)
+  redash-server:
+    image: redash/redash:10.1.0.b50633
+    container_name: redash_server
+    restart: unless-stopped
+    depends_on:
+      - redash-redis
+    ports:
+      - "5000:5000"
+    environment:
+      - REDASH_DATABASE_URL=postgresql://${SUPABASE_DB_USER}:${SUPABASE_DB_PASSWORD}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT:-6543}/redash?sslmode=require
+      - REDASH_REDIS_URL=redis://redash-redis:6379/0
+      - REDASH_SECRET_KEY=${REDASH_SECRET_KEY:-changeme-secret}
+      - REDASH_COOKIE_SECRET=${REDASH_COOKIE_SECRET:-changeme-cookie}
+      - REDASH_WEB_WORKERS=4
+      - PYTHONUNBUFFERED=0
+      - TZ=${TIMEZONE:-Asia/Jakarta}
+    command: server
+
+  redash-worker:
+    image: redash/redash:10.1.0.b50633
+    container_name: redash_worker
+    restart: unless-stopped
+    depends_on:
+      - redash-server
+    environment:
+      - REDASH_DATABASE_URL=postgresql://${SUPABASE_DB_USER}:${SUPABASE_DB_PASSWORD}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT:-6543}/redash?sslmode=require
+      - REDASH_REDIS_URL=redis://redash-redis:6379/0
+      - REDASH_SECRET_KEY=${REDASH_SECRET_KEY:-changeme-secret}
+      - REDASH_COOKIE_SECRET=${REDASH_COOKIE_SECRET:-changeme-cookie}
+      - PYTHONUNBUFFERED=0
+      - TZ=${TIMEZONE:-Asia/Jakarta}
+    command: worker
+
+  redash-scheduler:
+    image: redash/redash:10.1.0.b50633
+    container_name: redash_scheduler
+    restart: unless-stopped
+    depends_on:
+      - redash-server
+    environment:
+      - REDASH_DATABASE_URL=postgresql://${SUPABASE_DB_USER}:${SUPABASE_DB_PASSWORD}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT:-6543}/redash?sslmode=require
+      - REDASH_REDIS_URL=redis://redash-redis:6379/0
+      - REDASH_SECRET_KEY=${REDASH_SECRET_KEY:-changeme-secret}
+      - REDASH_COOKIE_SECRET=${REDASH_COOKIE_SECRET:-changeme-cookie}
+      - PYTHONUNBUFFERED=0
+      - TZ=${TIMEZONE:-Asia/Jakarta}
+    command: scheduler
+
+  redash-redis:
+    image: redis:7-alpine
+    container_name: redash_redis
+    restart: unless-stopped
+    volumes:
+      - redash_redis_data:/data
+
+volumes:
+  n8n_data:
+  redash_redis_data:
