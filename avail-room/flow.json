@@ -1,0 +1,1042 @@
+{
+  "name": "Guesty - Get Listing",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -944,
+        528
+      ],
+      "id": "dd3b0eff-6f7a-4c4d-b793-5e7df97ea661",
+      "name": "When clicking 'Execute workflow'"
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.first().json.results || [];\nconst output = [];\n\nfor (const listing of results) {\n  const prices = listing.prices || {};\n  const weeklyFactor  = prices.weeklyPriceFactor  ?? null;\n  const monthlyFactor = prices.monthlyPriceFactor ?? null;\n\n  output.push({\n    id:              listing._id,\n    title:           listing.nickname || listing.title || \"Untitled\",\n    location:        listing.address?.city || \"Canggu, Bali\",\n    bedrooms:        listing.bedrooms    || 0,\n    bathrooms:       listing.bathrooms   || 0,\n    accommodates:    listing.accommodates || 0,\n    minNights:       listing.terms?.minNights ?? 1,\n    basePrice:       prices.basePrice     || 0,\n    currency:        prices.currency      || \"IDR\",\n    weeklyFactor:    weeklyFactor,\n    monthlyFactor:   monthlyFactor,\n    weeklyDiscount:  weeklyFactor  != null ? Math.round((1 - weeklyFactor)  * 100) : \"Not set\",\n    monthlyDiscount: monthlyFactor != null ? Math.round((1 - monthlyFactor) * 100) : \"Not set\",\n    cleaningFee:     prices.cleaningFee       ?? \"Not set\",\n    extraPersonFee:  prices.extraPersonFee     ?? \"Not set\",\n    securityDeposit: prices.securityDepositFee ?? \"Not set\",\n  });\n}\n\nreturn output.map(i => ({ json: i }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -272,
+        256
+      ],
+      "id": "8a9155ad-63b9-4bd6-9b43-2f582aa87857",
+      "name": "Return Listing",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "WYiBI0tpu2KLdZPn",
+          "mode": "list",
+          "cachedResultName": "auth-code",
+          "cachedResultUrl": "/projects/KfFSiUMge1Q95BET/datatables/WYiBI0tpu2KLdZPn"
+        },
+        "matchType": "allConditions"
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -720,
+        528
+      ],
+      "id": "78672398-2658-4322-a0ab-968bbb0150e1",
+      "name": "Get Credential"
+    },
+    {
+      "parameters": {
+        "url": "https://open-api.guesty.com/v1/listings",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {}
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -496,
+        448
+      ],
+      "id": "f9013feb-de0a-49d9-a115-9a32c1c55743",
+      "name": "Request Listing",
+      "alwaysOutputData": false,
+      "retryOnFail": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        448
+      ],
+      "id": "4b0bd679-0ee0-44dd-9802-001638304f03",
+      "name": "Return Error"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "e037d37b-cc40-4db0-8a83-fcc4da7b28cf",
+              "leftValue": "={{ $json.error.status }}",
+              "rightValue": "=401",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -272,
+        544
+      ],
+      "id": "a470b959-0d7a-4ca7-98dd-c12b461de65b",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "_zZDAF0KErkbiR2dOPNig",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/_zZDAF0KErkbiR2dOPNig",
+          "cachedResultName": "Guesty Auth"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        -48,
+        688
+      ],
+      "id": "35fb0fb3-7e57-4dfb-bfef-15d67c51c976",
+      "name": "Call 'Guesty Auth'"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -48,
+        256
+      ],
+      "id": "eda40dfe-5a6c-41da-91d0-c1e30dc8b9f9",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nfunction cleanNum(val) {\n  if (val === null || val === undefined || val === 'Not set') return null;\n  const n = Number(val);\n  return isNaN(n) ? null : n;\n}\n\nreturn [{\n  json: {\n    id:               input.id,\n    title:            input.title            || null,\n    location:         input.location         || null,\n    bedrooms:         input.bedrooms         ?? null,\n    bathrooms:        cleanNum(input.bathrooms),\n    accommodates:     input.accommodates     ?? null,\n    min_nights:       input.minNights        ?? 1,\n    base_price:       cleanNum(input.basePrice),\n    currency:         input.currency         || 'IDR',\n    weekly_factor:    cleanNum(input.weeklyFactor),\n    monthly_factor:   cleanNum(input.monthlyFactor),\n    weekly_discount:  cleanNum(input.weeklyDiscount),\n    monthly_discount: cleanNum(input.monthlyDiscount),\n    cleaning_fee:     cleanNum(input.cleaningFee),\n    extra_person_fee: cleanNum(input.extraPersonFee) ?? 0,\n    security_deposit: cleanNum(input.securityDeposit),\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        336,
+        112
+      ],
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Transform Listing"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "operation": "getAll",
+        "tableId": "guesty_listings",
+        "returnAll": false,
+        "limit": 1,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        560,
+        112
+      ],
+      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "name": "Get Listing",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "oBBPswPRpaTz0xXE",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const dbRows = $input.all();\nconst transformed = $('Transform Listing').item.json;\n\n// alwaysOutputData: when no match → [{json:{}}], when match → [{json:{id,...}}]\nconst existingRow = dbRows[0]?.json;\nconst exists = !!(existingRow && existingRow.id);\n\nreturn [{ json: { ...transformed, _exists: exists } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        112
+      ],
+      "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+      "name": "Prepare Upsert"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "listing-exists-cond-0001",
+              "leftValue": "={{ $json._exists }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1008,
+        112
+      ],
+      "id": "d4e5f6a7-b8c9-0123-defa-234567890123",
+      "name": "Listing Exists?"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "operation": "update",
+        "tableId": "guesty_listings",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        },
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "title",            "fieldValue": "={{ $json.title }}" },
+            { "fieldId": "location",         "fieldValue": "={{ $json.location }}" },
+            { "fieldId": "bedrooms",         "fieldValue": "={{ $json.bedrooms }}" },
+            { "fieldId": "bathrooms",        "fieldValue": "={{ $json.bathrooms }}" },
+            { "fieldId": "accommodates",     "fieldValue": "={{ $json.accommodates }}" },
+            { "fieldId": "min_nights",       "fieldValue": "={{ $json.min_nights }}" },
+            { "fieldId": "base_price",       "fieldValue": "={{ $json.base_price }}" },
+            { "fieldId": "currency",         "fieldValue": "={{ $json.currency }}" },
+            { "fieldId": "weekly_factor",    "fieldValue": "={{ $json.weekly_factor }}" },
+            { "fieldId": "monthly_factor",   "fieldValue": "={{ $json.monthly_factor }}" },
+            { "fieldId": "weekly_discount",  "fieldValue": "={{ $json.weekly_discount }}" },
+            { "fieldId": "monthly_discount", "fieldValue": "={{ $json.monthly_discount }}" },
+            { "fieldId": "cleaning_fee",     "fieldValue": "={{ $json.cleaning_fee }}" },
+            { "fieldId": "extra_person_fee", "fieldValue": "={{ $json.extra_person_fee }}" },
+            { "fieldId": "security_deposit", "fieldValue": "={{ $json.security_deposit }}" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1232,
+        -80
+      ],
+      "id": "e5f6a7b8-c9d0-1234-efab-345678901234",
+      "name": "Update Listing",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "oBBPswPRpaTz0xXE",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "tableId": "guesty_listings",
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "id",               "fieldValue": "={{ $json.id }}" },
+            { "fieldId": "title",            "fieldValue": "={{ $json.title }}" },
+            { "fieldId": "location",         "fieldValue": "={{ $json.location }}" },
+            { "fieldId": "bedrooms",         "fieldValue": "={{ $json.bedrooms }}" },
+            { "fieldId": "bathrooms",        "fieldValue": "={{ $json.bathrooms }}" },
+            { "fieldId": "accommodates",     "fieldValue": "={{ $json.accommodates }}" },
+            { "fieldId": "min_nights",       "fieldValue": "={{ $json.min_nights }}" },
+            { "fieldId": "base_price",       "fieldValue": "={{ $json.base_price }}" },
+            { "fieldId": "currency",         "fieldValue": "={{ $json.currency }}" },
+            { "fieldId": "weekly_factor",    "fieldValue": "={{ $json.weekly_factor }}" },
+            { "fieldId": "monthly_factor",   "fieldValue": "={{ $json.monthly_factor }}" },
+            { "fieldId": "weekly_discount",  "fieldValue": "={{ $json.weekly_discount }}" },
+            { "fieldId": "monthly_discount", "fieldValue": "={{ $json.monthly_discount }}" },
+            { "fieldId": "cleaning_fee",     "fieldValue": "={{ $json.cleaning_fee }}" },
+            { "fieldId": "extra_person_fee", "fieldValue": "={{ $json.extra_person_fee }}" },
+            { "fieldId": "security_deposit", "fieldValue": "={{ $json.security_deposit }}" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1232,
+        304
+      ],
+      "id": "f6a7b8c9-d0e1-2345-fabc-456789012345",
+      "name": "Create Listing",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "oBBPswPRpaTz0xXE",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://open-api.guesty.com/v1/availability-pricing/api/calendar/listings/{{ $('Loop Over Items').item.json.id }}?startDate=2026-04-01&endDate=2026-04-30",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $('Get Credential').item.json.token }}"
+            }
+          ]
+        },
+        "options": {
+          "redirect": {
+            "redirect": {}
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1536,
+        112
+      ],
+      "id": "768db93d-876f-4392-a99a-aba5b14b9c26",
+      "name": "Request Availability",
+      "alwaysOutputData": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const apiResponse = $input.first().json;\nconst days = apiResponse?.data?.days || [];\n\nconst startDate = '2026-04-01';\nconst endDate   = '2026-04-30';\n\nconst listingId = days.length > 0 ? days[0].listingId : null;\n\nif (!listingId) {\n  return [{ json: {\n    listing_id: null,\n    start_date: startDate,\n    end_date: endDate,\n    calendar_rows: [],\n    reservation_rows: [],\n    has_reservations: false,\n    error: 'No listingId in response'\n  }}];\n}\n\nconst calendarRows = days.map(day => ({\n  date:                day.date,\n  listing_id:          day.listingId,\n  currency:            day.currency            || 'IDR',\n  price:               day.price               ?? null,\n  base_price:          day.basePrice           ?? null,\n  rate_strategy_price: day.rateStrategyPrice   ?? null,\n  min_nights:          day.minNights           ?? 1,\n  max_nights:          day.maxNights           ?? 365,\n  status:              day.status              || 'available',\n  cta:                 day.cta                 ?? false,\n  ctd:                 day.ctd                 ?? false,\n  request_to_book:     day.requestToBook       ?? false,\n  blocks:              day.blocks              ?? null,\n  rules_applied:       day.rulesApplied?.length ? day.rulesApplied : null,\n  reservation_id:      day.reservation?._id   ?? null,\n}));\n\nconst reservationMap = {};\nfor (const day of days) {\n  const r = day.reservation;\n  if (r && r._id) reservationMap[r._id] = r;\n}\n\nconst reservationRows = Object.values(reservationMap).map(r => ({\n  id:                r._id,\n  listing_id:        r.listingId           || listingId,\n  account_id:        r.accountId           || null,\n  confirmation_code: r.confirmationCode    || null,\n  source:            r.source              || null,\n  status:            r.status              || null,\n  check_in_date:     r.checkIn  ? r.checkIn.substring(0, 10)  : null,\n  check_out_date:    r.checkOut ? r.checkOut.substring(0, 10) : null,\n  check_in:          r.checkIn             || null,\n  check_out:         r.checkOut            || null,\n  nights_count:      r.nightsCount         ?? null,\n  guests_count:      r.guestsCount         ?? null,\n  num_adults:        r.numAdults           ?? 0,\n  num_children:      r.numChildren         ?? 0,\n  num_infants:       r.numInfants          ?? 0,\n  guest_id:          r.guestId             || null,\n  guest_full_name:   r.guestFullName       || null,\n  platform:          r.platform            || null,\n  listing_nickname:  r.listingNickname     || null,\n  listing_timezone:  r.listingTimezone     || null,\n  balance_due:       r.balanceDue          ?? null,\n  host_payout:       r.hostPayout          ?? null,\n  total_paid:        r.totalPaid           ?? null,\n  fare_accommodation:r.fareAccommodation   ?? null,\n  currency:          r.currency            || 'IDR',\n  guest_stay_status: r.guestStayStatus     || null,\n}));\n\nreturn [{ json: {\n  listing_id:       listingId,\n  start_date:       startDate,\n  end_date:         endDate,\n  calendar_rows:    calendarRows,\n  reservation_rows: reservationRows,\n  has_reservations: reservationRows.length > 0,\n}}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        112
+      ],
+      "id": "18a01443-b843-4490-a8e6-7a6268c2ef0a",
+      "name": "Parse Availability"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "operation": "delete",
+        "tableId": "guesty_calendar",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "listing_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.listing_id }}"
+            },
+            {
+              "keyName": "date",
+              "condition": "gte",
+              "keyValue": "={{ $json.start_date }}"
+            },
+            {
+              "keyName": "date",
+              "condition": "lte",
+              "keyValue": "={{ $json.end_date }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1984,
+        112
+      ],
+      "id": "5fa25cd9-a9e2-4052-9a15-dce8efc0f241",
+      "name": "Delete Calendar Range",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "oBBPswPRpaTz0xXE",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Delete Calendar Range failed — log and skip this listing\nconst err = $input.first().json;\nconsole.error('Delete Calendar Range failed:', JSON.stringify(err));\nreturn [{ json: { _skip: true, _error: err } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        112
+      ],
+      "id": "3fad6688-789d-4fd7-ae94-6035cb1cfc1e",
+      "name": "Skip Listing On Error"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "has-res-cond-0001",
+              "leftValue": "={{ $json.has_reservations }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2208,
+        304
+      ],
+      "id": "a3e43ec2-9c08-4e7c-8951-f26562c0a64a",
+      "name": "Has Reservations"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $('Parse Availability').item.json.reservation_rows;\nreturn rows.map(r => ({ json: r }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2432,
+        448
+      ],
+      "id": "b6304b7d-e14c-4ae5-bad6-4501b38122f4",
+      "name": "Split Reservation Rows"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "operation": "delete",
+        "tableId": "guesty_reservations",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.id }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2656,
+        448
+      ],
+      "id": "682541c5-35cd-4fc2-bfc4-82f686efda2e",
+      "name": "Delete Reservation",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "oBBPswPRpaTz0xXE",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "tableId": "guesty_reservations",
+        "dataToSend": "autoMapInputData",
+        "inputsToIgnore": "imported_at"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2880,
+        592
+      ],
+      "id": "cbd8dff4-b6f5-4409-ade5-6ae9363b8e27",
+      "name": "Insert Reservation",
+      "credentials": {
+        "supabaseApi": {
+          "id": "oBBPswPRpaTz0xXE",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "reservations_done",
+        "include": "noOtherFields",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        3104,
+        384
+      ],
+      "id": "249314b2-0631-4fcb-b574-172fdea0b5c4",
+      "name": "Aggregate Reservations"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split calendar rows into individual items.\n// Returns a dummy _empty flag if no rows so the chain still completes.\nconst rows = $('Parse Availability').item.json.calendar_rows;\nif (!rows || rows.length === 0) {\n  return [{ json: { _empty: true } }];\n}\nreturn rows.map(r => ({ json: r }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3328,
+        384
+      ],
+      "id": "f32c4536-1dbc-45cb-a4c2-76c11ad7f99c",
+      "name": "Split Calendar Rows"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "has-cal-cond-0001",
+              "leftValue": "={{ $json._empty }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3552,
+        384
+      ],
+      "id": "031db3fe-f18c-4e63-8905-ca9f55a9b52f",
+      "name": "Has Calendar Rows"
+    },
+    {
+      "parameters": {
+        "useCustomSchema": true,
+        "tableId": "guesty_calendar",
+        "dataToSend": "autoMapInputData",
+        "inputsToIgnore": "id,imported_at"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3776,
+        592
+      ],
+      "id": "273a6c09-7343-48ab-a288-f47b51b56004",
+      "name": "Insert Calendar",
+      "credentials": {
+        "supabaseApi": {
+          "id": "oBBPswPRpaTz0xXE",
+          "name": "Supabase account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "calendar_done",
+        "include": "noOtherFields",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        4000,
+        448
+      ],
+      "id": "a004b388-2435-45e6-855d-94e80c05b79c",
+      "name": "Aggregate Calendar"
+    }
+  ],
+  "pinData": {
+    "When clicking 'Execute workflow'": [
+      {
+        "json": {},
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "Get Credential",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return Listing": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Credential": {
+      "main": [
+        [
+          {
+            "node": "Request Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Listing": {
+      "main": [
+        [
+          {
+            "node": "Return Listing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Call 'Guesty Auth'",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call 'Guesty Auth'": {
+      "main": [
+        [
+          {
+            "node": "Get Credential",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Transform Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform Listing": {
+      "main": [
+        [
+          {
+            "node": "Get Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Listing": {
+      "main": [
+        [
+          {
+            "node": "Prepare Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Upsert": {
+      "main": [
+        [
+          {
+            "node": "Listing Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Listing Exists?": {
+      "main": [
+        [
+          {
+            "node": "Update Listing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Listing": {
+      "main": [
+        [
+          {
+            "node": "Request Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Listing": {
+      "main": [
+        [
+          {
+            "node": "Request Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Availability": {
+      "main": [
+        [
+          {
+            "node": "Parse Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Availability": {
+      "main": [
+        [
+          {
+            "node": "Delete Calendar Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Calendar Range": {
+      "main": [
+        [
+          {
+            "node": "Has Reservations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Listing On Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Listing On Error": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Reservations": {
+      "main": [
+        [
+          {
+            "node": "Split Reservation Rows",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Reservations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Reservation Rows": {
+      "main": [
+        [
+          {
+            "node": "Delete Reservation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Reservation": {
+      "main": [
+        [
+          {
+            "node": "Insert Reservation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Reservations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Reservation": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Reservations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Reservations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Reservations": {
+      "main": [
+        [
+          {
+            "node": "Split Calendar Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Calendar Rows": {
+      "main": [
+        [
+          {
+            "node": "Has Calendar Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Calendar Rows": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Calendar": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Calendar": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "22e0fada-c22d-40c8-a242-092805f061e4",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "87deca8b57220d6ec0e4017381af8720cd53cda604a6505f67dac52cab40884d"
+  },
+  "id": "8oosXZrnLZdWBvZnPQvMO",
+  "tags": []
+}

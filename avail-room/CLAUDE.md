@@ -16,12 +16,10 @@ Flow:
 3. Claude uses MCP Supabase to parse intent + query the database
 4. Returns a WhatsApp-formatted reply (only *bold* and _italic_ allowed)
 
-Key tables: listings, rooms, addresses, pricing, reservations
-- listings: id, name, status (filter: status = 'active')
-- rooms: listing_id, bedrooms
-- addresses: listing_id, city
-- pricing: listing_id, price_per_night, currency
-- reservations: listing_id, check_in, check_out, status (confirmed/inquiry/blocked)
+Key tables: guesty_listings, guesty_calendar, guesty_reservations
+- guesty_listings: id, title, location, bedrooms, bathrooms, accommodates, min_nights, base_price, currency
+- guesty_calendar: date, listing_id, price, status (available|booked), reservation_id
+- guesty_reservations: id, listing_id, status, check_in_date, check_out_date (exclude status IN ('confirmed','inquiry','blocked') for availability)
 
 Always use parameterized MCP queries. Never expose service_role on the frontend.
 Reply format: WhatsApp only — *bold* and _italic_, no headers, tables, lists, or code blocks.
