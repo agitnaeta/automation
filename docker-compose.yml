@@ -8,6 +8,12 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      - N8N_DOMAIN=${N8N_DOMAIN:-localhost}
+      - REDASH_DOMAIN=${REDASH_DOMAIN:-redash.localhost}
+      - WAHA_DOMAIN=${WAHA_DOMAIN:-waha.localhost}
+      - AVAIL_ROOM_DOMAIN=${AVAIL_ROOM_DOMAIN:-avail.localhost}
+      - REPLY_DOMAIN=${REPLY_DOMAIN:-reply.localhost}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -24,7 +30,7 @@ services:
       - N8N_HOST=${N8N_DOMAIN:-localhost}
       - N8N_PORT=5678
       - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
-      - WEBHOOK_URL=${N8N_PROTOCOL:-http}://${N8N_DOMAIN:-localhost}:5678
+      - WEBHOOK_URL=${N8N_PROTOCOL:-http}://${N8N_DOMAIN:-localhost}
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=${SUPABASE_DB_HOST}
       - DB_POSTGRESDB_PORT=${SUPABASE_DB_PORT:-6543}
