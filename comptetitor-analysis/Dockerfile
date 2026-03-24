@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+# Install claude CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+COPY server.js ./
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

@@ -1,4 +1,19 @@
 services:
+
+  # ─── Caddy (reverse proxy) ────────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # ─── n8n (workflow automation) ────────────────────────────────────────────────
   n8n:
     image: n8nio/n8n:latest
     container_name: n8n_automation
@@ -6,13 +21,10 @@ services:
     ports:
       - "5678:5678"
     environment:
-      # n8n basic config
       - N8N_HOST=${N8N_DOMAIN:-localhost}
       - N8N_PORT=5678
       - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
       - WEBHOOK_URL=${N8N_PROTOCOL:-http}://${N8N_DOMAIN:-localhost}:5678
-
-      # Database - Supabase PostgreSQL
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=${SUPABASE_DB_HOST}
       - DB_POSTGRESDB_PORT=${SUPABASE_DB_PORT:-6543}
@@ -22,25 +34,16 @@ services:
       - DB_POSTGRESDB_SCHEMA=${SUPABASE_DB_SCHEMA:-n8n}
       - DB_POSTGRESDB_SSL_ENABLED=true
       - DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED=false
-
-      # Encryption key for credentials
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-
-      # Optional: basic auth
       - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-false}
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-changeme}
-
-      # Timezone
       - GENERIC_TIMEZONE=${TIMEZONE:-Asia/Jakarta}
       - TZ=${TIMEZONE:-Asia/Jakarta}
-
     volumes:
       - n8n_data:/home/node/.n8n
 
-  # ─── Redash ───────────────────────────────────────────────────────────
-  # ─── Redash ───────────────────────────────────────────────────────────
-  # DB: Supabase PostgreSQL (same as n8n, separate schema: redash)
+  # ─── Redash (analytics dashboard) ────────────────────────────────────────────
   redash-server:
     image: redash/redash:10.1.0.b50633
     container_name: redash_server
@@ -48,7 +51,7 @@ services:
     depends_on:
       - redash-redis
     ports:
-      - "5000:5000"
+      - "5001:5000"
     environment:
       - REDASH_DATABASE_URL=postgresql://${SUPABASE_DB_USER}:${SUPABASE_DB_PASSWORD}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT:-6543}/redash?sslmode=require
       - REDASH_REDIS_URL=redis://redash-redis:6379/0
@@ -96,6 +99,64 @@ services:
     volumes:
       - redash_redis_data:/data
 
+  # ─── WAHA (WhatsApp HTTP API) ─────────────────────────────────────────────────
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: waha
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME:-admin}
+      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD:-changeme}
+      - TZ=${TIMEZONE:-Asia/Jakarta}
+    volumes:
+      - waha_sessions:/app/.sessions
+      - waha_media:/app/.media
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
+  # ─── Reply (WhatsApp bot — WAHA + Claude) ────────────────────────────────────
+  reply:
+    build: ./comptetitor-analysis
+    container_name: competitor_analysis_bot
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - PORT=3000
+      - WAHA_BASE_URL=http://waha:3000
+      - WAHA_API_KEY=${WAHA_API_KEY:-}
+      - WAHA_SESSION=${WAHA_SESSION:-default}
+      - CLAUDE_TIMEOUT_MS=${CLAUDE_TIMEOUT_MS:-60000}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TZ=${TIMEZONE:-Asia/Jakarta}
+    depends_on:
+      - waha
+
+  # ─── Avail-Room (villa availability API) ─────────────────────────────────────
+  avail-room:
+    build: ./avail-room
+    container_name: avail_room_api
+    restart: unless-stopped
+    ports:
+      - "8100:3000"
+    environment:
+      - PORT=3000
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_ACCESS_TOKEN=${SUPABASE_ACCESS_TOKEN}
+      - SUPABASE_PROJECT_REF=${SUPABASE_PROJECT_REF}
+      - TZ=${TIMEZONE:-Asia/Jakarta}
+
+
 volumes:
+  caddy_data:
+  caddy_config:
   n8n_data:
   redash_redis_data:
+  waha_sessions:
+  waha_media:

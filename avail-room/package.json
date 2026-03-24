@@ -1,0 +1,21 @@
+{
+  "name": "avail-room",
+  "version": "1.0.0",
+  "description": "Villa availability API — Claude + MCP Supabase",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@supabase/mcp-server-supabase": "latest",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,3 +1,25 @@
-{$N8N_DOMAIN} {
+# ─── n8n ─────────────────────────────────────────────────────────────────────
+{$N8N_DOMAIN:localhost} {
     reverse_proxy n8n:5678
 }
+
+# ─── Redash ───────────────────────────────────────────────────────────────────
+{$REDASH_DOMAIN:redash.localhost} {
+    reverse_proxy redash-server:5000
+}
+
+# ─── WAHA ─────────────────────────────────────────────────────────────────────
+{$WAHA_DOMAIN:waha.localhost} {
+    reverse_proxy waha:3000
+}
+
+# ─── Avail-Room ───────────────────────────────────────────────────────────────
+{$AVAIL_ROOM_DOMAIN:avail.localhost} {
+    reverse_proxy avail-room:3000
+}
+
+# ─── Reply Bot ────────────────────────────────────────────────────────────────
+{$REPLY_DOMAIN:reply.localhost} {
+    reverse_proxy reply:3000
+}
+
