@@ -9,8 +9,11 @@
     "dev": "node --watch server.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@supabase/mcp-server-supabase": "latest",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "openai": "^4.0.0",
     "uuid": "^10.0.0"
   },
   "engines": {

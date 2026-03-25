@@ -1,5 +1,5 @@
 import express from "express";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import "dotenv/config";
@@ -9,7 +9,10 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const openai = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
 
 // ─── MCP Client (initialized once at startup) ─────────────────────────────────
 let mcpClient = null;
@@ -33,23 +36,27 @@ async function initMCP() {
   await mcpClient.connect(transport);
 
   const { tools } = await mcpClient.listTools();
-  // Convert MCP tool schema → Anthropic tool format
+  // Convert MCP tool schema → OpenAI tool format
   mcpTools = tools.map((t) => ({
-    name: t.name,
-    description: t.description,
-    input_schema: t.inputSchema,
+    type: "function",
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.inputSchema,
+    },
   }));
 
-  console.log(`✅ MCP connected. Tools: ${mcpTools.map((t) => t.name).join(", ")}`);
+  console.log(`✅ MCP connected. Tools: ${mcpTools.map((t) => t.function.name).join(", ")}`);
 }
 
-// ─── Claude + MCP tool loop ───────────────────────────────────────────────────
+// ─── OpenRouter + MCP tool loop ───────────────────────────────────────────────
 async function askClaude(userMessage) {
   const today = new Date().toISOString().split("T")[0];
 
-  const messages = [{ role: "user", content: userMessage }];
-
-  const system = `You are a villa availability assistant. Today is ${today}.
+  const messages = [
+    {
+      role: "system",
+      content: `You are a villa availability assistant. Today is ${today}.
 Use the Supabase tools to answer availability queries. Follow this flow:
 1. Parse the customer's intent: check_in, check_out, bedrooms, location.
 2. Query guesty_listings filtered by bedrooms and/or location as needed.
@@ -65,53 +72,51 @@ Key tables (ONLY these three exist):
 - guesty_calendar: date, listing_id, price, status (available|booked), reservation_id
 - guesty_reservations: id, listing_id, status, check_in_date, check_out_date
 
-If no dates given, ask the customer to include a date range.`;
+If no dates given, ask the customer to include a date range.`,
+    },
+    { role: "user", content: userMessage },
+  ];
 
-  // Agentic loop: keep going until end_turn (no more tool calls)
+  // Agentic loop: keep going until stop (no more tool calls)
   while (true) {
-    const response = await claude.messages.create({
-      model: "claude-opus-4-6",
+    const response = await openai.chat.completions.create({
+      model: "anthropic/claude-opus-4.6",
       max_tokens: 1024,
-      system,
       tools: mcpTools,
       messages,
     });
 
-    if (response.stop_reason === "end_turn") {
-      return response.content.find((b) => b.type === "text")?.text?.trim() ?? "";
+    const choice = response.choices[0];
+
+    if (choice.finish_reason === "stop") {
+      return choice.message.content?.trim() ?? "";
     }
 
-    if (response.stop_reason === "tool_use") {
+    if (choice.finish_reason === "tool_calls") {
       // Append assistant message with tool calls
-      messages.push({ role: "assistant", content: response.content });
+      messages.push(choice.message);
 
       // Execute all tool calls against MCP server
       const toolResults = await Promise.all(
-        response.content
-          .filter((b) => b.type === "tool_use")
-          .map(async (toolUse) => {
-            console.log(`🔧 MCP call: ${toolUse.name}`, JSON.stringify(toolUse.input));
-            try {
-              const result = await mcpClient.callTool({
-                name: toolUse.name,
-                arguments: toolUse.input,
-              });
-              const content = Array.isArray(result.content)
-                ? result.content.map((c) => (typeof c === "object" ? JSON.stringify(c) : c)).join("\n")
-                : JSON.stringify(result.content);
-              return { type: "tool_result", tool_use_id: toolUse.id, content };
-            } catch (err) {
-              return {
-                type: "tool_result",
-                tool_use_id: toolUse.id,
-                is_error: true,
-                content: err.message,
-              };
-            }
-          })
+        choice.message.tool_calls.map(async (toolCall) => {
+          const args = JSON.parse(toolCall.function.arguments);
+          console.log(`🔧 MCP call: ${toolCall.function.name}`, JSON.stringify(args));
+          try {
+            const result = await mcpClient.callTool({
+              name: toolCall.function.name,
+              arguments: args,
+            });
+            const content = Array.isArray(result.content)
+              ? result.content.map((c) => (typeof c === "object" ? JSON.stringify(c) : c)).join("\n")
+              : JSON.stringify(result.content);
+            return { role: "tool", tool_call_id: toolCall.id, content };
+          } catch (err) {
+            return { role: "tool", tool_call_id: toolCall.id, content: `Error: ${err.message}` };
+          }
+        })
       );
 
-      messages.push({ role: "user", content: toolResults });
+      messages.push(...toolResults);
     }
   }
 }

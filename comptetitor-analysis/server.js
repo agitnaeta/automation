@@ -1,5 +1,7 @@
 import express from "express";
-import { spawn } from "child_process";
+import OpenAI from "openai";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { v4 as uuidv4 } from "uuid";
 import "dotenv/config";
 
@@ -14,55 +16,109 @@ const CONFIG = {
   wahaBaseUrl: process.env.WAHA_BASE_URL || "http://localhost:3000",
   wahaApiKey: process.env.WAHA_API_KEY || "",
   wahaSession: process.env.WAHA_SESSION || "default",
-  claudeTimeoutMs: parseInt(process.env.CLAUDE_TIMEOUT_MS || "60000"),
 };
 
-// ─── Claude Code CLI ──────────────────────────────────────────────────────────
-function runClaude(prompt) {
-  return new Promise((resolve, reject) => {
-    const args = ["-p", prompt, "--dangerously-skip-permissions"];
-    const proc = spawn("claude", args, {
-      env: { ...process.env },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+const openai = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
 
-    let stdout = "";
-    let stderr = "";
+// ─── MCP Client (initialized once at startup) ─────────────────────────────────
+let mcpClient = null;
+let mcpTools = [];
 
-    proc.stdout.on("data", (d) => (stdout += d.toString()));
-    proc.stderr.on("data", (d) => (stderr += d.toString()));
+async function initMCP() {
+  const projectRef = process.env.SUPABASE_PROJECT_REF;
+  if (!projectRef) throw new Error("SUPABASE_PROJECT_REF is required");
+  if (!process.env.SUPABASE_ACCESS_TOKEN) throw new Error("SUPABASE_ACCESS_TOKEN is required");
 
-    const timer = setTimeout(() => {
-      proc.kill("SIGTERM");
-      reject(new Error(`Claude timed out after ${CONFIG.claudeTimeoutMs / 1000}s`));
-    }, CONFIG.claudeTimeoutMs);
-
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(stdout.trim());
-      else reject(new Error(`Claude exited code ${code}: ${stderr.trim()}`));
-    });
-
-    proc.on("error", (err) =>
-      reject(new Error(`Failed to spawn Claude: ${err.message}`))
-    );
+  const transport = new StdioClientTransport({
+    command: "npx",
+    args: ["@supabase/mcp-server-supabase", "--project-ref", projectRef, "--read-only"],
+    env: {
+      ...process.env,
+      SUPABASE_ACCESS_TOKEN: process.env.SUPABASE_ACCESS_TOKEN,
+    },
   });
+
+  mcpClient = new Client({ name: "competitor-analysis", version: "1.0.0" }, { capabilities: {} });
+  await mcpClient.connect(transport);
+
+  const { tools } = await mcpClient.listTools();
+  // Convert MCP tool schema → OpenAI tool format
+  mcpTools = tools.map((t) => ({
+    type: "function",
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.inputSchema,
+    },
+  }));
+
+  console.log(`✅ MCP connected. Tools: ${mcpTools.map((t) => t.function.name).join(", ")}`);
+}
+
+// ─── OpenRouter + MCP agentic loop ────────────────────────────────────────────
+async function askOpenRouter(systemPrompt, userMessage) {
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMessage },
+  ];
+
+  while (true) {
+    const response = await openai.chat.completions.create({
+      model: "anthropic/claude-opus-4.6",
+      max_tokens: 1024,
+      tools: mcpTools.length > 0 ? mcpTools : undefined,
+      messages,
+    });
+
+    const choice = response.choices[0];
+
+    if (choice.finish_reason === "stop") {
+      return choice.message.content?.trim() ?? "";
+    }
+
+    if (choice.finish_reason === "tool_calls") {
+      messages.push(choice.message);
+
+      const toolResults = await Promise.all(
+        choice.message.tool_calls.map(async (toolCall) => {
+          const args = JSON.parse(toolCall.function.arguments);
+          console.log(`🔧 MCP call: ${toolCall.function.name}`, JSON.stringify(args));
+          try {
+            const result = await mcpClient.callTool({
+              name: toolCall.function.name,
+              arguments: args,
+            });
+            const content = Array.isArray(result.content)
+              ? result.content.map((c) => (typeof c === "object" ? JSON.stringify(c) : c)).join("\n")
+              : JSON.stringify(result.content);
+            return { role: "tool", tool_call_id: toolCall.id, content };
+          } catch (err) {
+            return { role: "tool", tool_call_id: toolCall.id, content: `Error: ${err.message}` };
+          }
+        })
+      );
+
+      messages.push(...toolResults);
+    }
+  }
 }
 
 async function isVillaContext(text) {
-  // Quick local fallback check for explicit keywords
   const low = (text || "").toLowerCase();
   const explicit = ["villa", "villa booking", "villa availability", "villas", "villa rental", "villa price", "villa stay"].some((k) => low.includes(k));
   if (explicit) return true;
 
-  // Use Claude as context classifier when text isn't clearly explicit.
   try {
-    const prompt = `You are a strict context classifier. Reply with ONLY one word: yes or no.\nIs this WhatsApp message from a customer about a villa listing, villa booking, villa availability, or villa property details?\nMessage: "${text.replace(/\"/g, "\\\"")}"`;
-    const result = await runClaude(prompt);
+    const result = await askOpenRouter(
+      "You are a strict context classifier. Reply with ONLY one word: yes or no.",
+      `Is this WhatsApp message from a customer about a villa listing, villa booking, villa availability, or villa property details?\nMessage: "${text.replace(/"/g, '\\"')}"`
+    );
     const normalized = (result || "").trim().toLowerCase();
     if (/^yes/.test(normalized)) return true;
     if (/^no/.test(normalized)) return false;
-    // fallback: if uncertain, default false to avoid unwanted replies
     return false;
   } catch (err) {
     console.warn("Villa context classifier failed, defaulting to false:", err.message);
@@ -113,7 +169,6 @@ function parseWebhookMessage(body) {
 
   if (!payload) return null;
 
-  // Handle known non-message events for logging
   if (event === "session.status") {
     const chatId = body?.me?.id || payload?.me?.id || "unknown";
     return {
@@ -126,9 +181,6 @@ function parseWebhookMessage(body) {
     };
   }
 
-  // WAHA sends different event types — we only care about incoming messages
-  // Supported event: message, message.any
-  // Skip messages sent by us (fromMe)
   const fromMe = [
     payload?.fromMe,
     payload?.key?.fromMe,
@@ -145,10 +197,9 @@ function parseWebhookMessage(body) {
     return null;
   }
 
-  // Extract text content
   const text =
-    payload?.body ||                          // standard text
-    payload?.message?.conversation ||         // some versions
+    payload?.body ||
+    payload?.message?.conversation ||
     payload?.message?.extendedTextMessage?.text ||
     payload?.message?.conversation;
 
@@ -159,18 +210,12 @@ function parseWebhookMessage(body) {
     payload?.from ||
     payload?.chatId;
 
-  const allowedSuffixes = ["8161", "0334","6780"];
+  const allowedSuffixes = ["8161", "0334", "6780"];
   const normalizedId = (chatId || "").toString();
   const senderNumber = normalizedId.replace(/[^0-9]/g, "");
-  const isAllowed = true; // For testing, allow all numbers. To restrict, use: allowedSuffixes.some(suffix => senderNumber.endsWith(suffix));
+  const isAllowed = true; // For testing, allow all numbers.
   if (!isAllowed) {
-    return {
-      event,
-      type: "ignored_number",
-      chatId,
-      senderNumber,
-      text,
-    };
+    return { event, type: "ignored_number", chatId, senderNumber, text };
   }
 
   const messageId =
@@ -194,7 +239,6 @@ app.post("/webhook", async (req, res) => {
 
   console.log(`\n[${requestId}] 📨 Webhook received:`, JSON.stringify(body, null, 2));
 
-  // Acknowledge immediately so WAHA doesn't retry
   res.json({ status: "received", requestId });
 
   const msg = parseWebhookMessage(body);
@@ -218,16 +262,12 @@ app.post("/webhook", async (req, res) => {
   }
 
   if (msg.type === "session_status") {
-    console.log(
-      `[${requestId}] 🔁 Session status event (${msg.session}) from ${msg.chatId}: ${msg.status}`
-    );
+    console.log(`[${requestId}] 🔁 Session status event (${msg.session}) from ${msg.chatId}: ${msg.status}`);
     return;
   }
 
   if (msg.type === "ignored_number") {
-    console.log(
-      `[${requestId}] ⏭  Ignored number ${msg.senderNumber} from chatId ${msg.chatId}. Only endings 8161/0334 are processed.`
-    );
+    console.log(`[${requestId}] ⏭  Ignored number ${msg.senderNumber} from chatId ${msg.chatId}.`);
     return;
   }
 
@@ -241,28 +281,35 @@ app.post("/webhook", async (req, res) => {
   }
 
   try {
-    // Ask Claude
-    console.log(`[${requestId}] 🤖 Sending to Claude...`);
-    const claudeReply = await runClaude(msg.text);
-    console.log(`[${requestId}] ✅ Claude replied: "${claudeReply.slice(0, 120)}..."`);
+    console.log(`[${requestId}] 🤖 Sending to OpenRouter...`);
+    const today = new Date().toISOString().split("T")[0];
+    const systemPrompt = `You are a villa availability assistant. Today is ${today}.
+Use the Supabase tools to answer availability queries. Follow this flow:
+1. Parse the customer's intent: check_in, check_out, bedrooms, location.
+2. Query guesty_listings filtered by bedrooms and/or location as needed.
+3. If dates given, check guesty_calendar for status = 'available' on each date in the range for the listing_id, OR exclude listing_ids that appear in guesty_reservations with overlapping check_in_date/check_out_date and status IN ('confirmed','inquiry','blocked').
+4. Use guesty_calendar.price for nightly price. Fall back to guesty_listings.base_price if calendar price is null.
+5. Reply in WhatsApp format: only *bold* and _italic_ — no headers, tables, lists, or code blocks.
+6. Include villa name (guesty_listings.title), location, price per night, and total for the stay.
+7. IMPORTANT: When calling tools, always pass raw SQL strings — never wrap queries in markdown code blocks or backticks.
+8. ONLY query these three tables. Never use listings, addresses, pricing, or any other table name.
 
-    // Send reply back via WAHA
-    const replyTo = msg.messageId
-      ? `${msg.chatId}_${msg.messageId}`
-      : null;
+Key tables (ONLY these three exist):
+- guesty_listings: id, title, location, bedrooms, bathrooms, accommodates, min_nights, base_price, currency
+- guesty_calendar: date, listing_id, price, status (available|booked), reservation_id
+- guesty_reservations: id, listing_id, status, check_in_date, check_out_date
 
-    await sendWhatsAppReply({
-      chatId: msg.chatId,
-      replyTo,
-      text: claudeReply,
-      session: msg.session,
-    });
+If no dates given, ask the customer to include a date range.`;
 
+    const reply = await askOpenRouter(systemPrompt, msg.text);
+    console.log(`[${requestId}] ✅ Replied: "${reply.slice(0, 120)}..."`);
+
+    const replyTo = msg.messageId ? `${msg.chatId}_${msg.messageId}` : null;
+
+    await sendWhatsAppReply({ chatId: msg.chatId, replyTo, text: reply, session: msg.session });
     console.log(`[${requestId}] 📤 Reply sent to ${msg.chatId}`);
   } catch (err) {
     console.error(`[${requestId}] ❌ Error:`, err.message);
-
-    // Optionally send error notice back to chat
     try {
       await sendWhatsAppReply({
         chatId: msg.chatId,
@@ -276,14 +323,12 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// ─── Manual send endpoint (for testing) ───────────────────────────────────────
-// POST /send  { "chatId": "...", "text": "...", "replyTo": "..." }
+// ─── Manual send endpoint ──────────────────────────────────────────────────────
 app.post("/send", async (req, res) => {
   const { chatId, text, replyTo, session } = req.body;
   if (!chatId || !text) {
     return res.status(400).json({ error: "chatId and text are required" });
   }
-
   try {
     const result = await sendWhatsAppReply({ chatId, text, replyTo, session });
     res.json({ success: true, result });
@@ -292,16 +337,14 @@ app.post("/send", async (req, res) => {
   }
 });
 
-// ─── Manual ask + send (test Claude → WhatsApp pipeline) ──────────────────────
-// POST /ask-and-send  { "chatId": "...", "prompt": "..." }
+// ─── Manual ask + send ─────────────────────────────────────────────────────────
 app.post("/ask-and-send", async (req, res) => {
   const { chatId, prompt, session } = req.body;
   if (!chatId || !prompt) {
     return res.status(400).json({ error: "chatId and prompt are required" });
   }
-
   try {
-    const answer = await runClaude(prompt);
+    const answer = await askOpenRouter("You are a helpful villa assistant.", prompt);
     const result = await sendWhatsAppReply({ chatId, text: answer, session });
     res.json({ success: true, prompt, answer, result });
   } catch (err) {
@@ -309,16 +352,12 @@ app.post("/ask-and-send", async (req, res) => {
   }
 });
 
-// ─── Competitor Analysis ──────────────────────────────────────────────────────
-// POST /analyze  { "location": "canggu", "dates": "2026-03-15/2026-03-20" }
+// ─── Competitor Analysis ───────────────────────────────────────────────────────
 app.post("/analyze", async (req, res) => {
   const { location, dates } = req.body;
   if (!location) {
     return res.status(400).json({ error: "location is required" });
   }
-
-  // TODO: implement competitor scraping / analysis logic
-  // e.g. scrape Airbnb, Booking.com, or call a pricing API for the given location + dates
   res.json({
     location,
     dates: dates || null,
@@ -329,18 +368,18 @@ app.post("/analyze", async (req, res) => {
 
 // Health
 app.get("/health", (_req, res) =>
-  res.json({ status: "ok", config: { wahaBaseUrl: CONFIG.wahaBaseUrl, session: CONFIG.wahaSession } })
+  res.json({ status: "ok", mcp: mcpClient ? "connected" : "not ready", config: { wahaBaseUrl: CONFIG.wahaBaseUrl, session: CONFIG.wahaSession } })
 );
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-app.listen(CONFIG.port, () => {
+app.listen(CONFIG.port, async () => {
   console.log(`
 ╔══════════════════════════════════════════════════════╗
-║        WAHA × Claude Bot  •  Port ${CONFIG.port}              ║
+║        WAHA × OpenRouter Bot  •  Port ${CONFIG.port}           ║
 ╠══════════════════════════════════════════════════════╣
 ║  POST /webhook       ← WAHA webhook target           ║
 ║  POST /send          → manual send message           ║
-║  POST /ask-and-send  → Claude + send pipeline test   ║
+║  POST /ask-and-send  → OpenRouter + send pipeline    ║
 ║  POST /analyze       → competitor analysis           ║
 ║  GET  /health        → server status                 ║
 ╠══════════════════════════════════════════════════════╣
@@ -348,4 +387,10 @@ app.listen(CONFIG.port, () => {
 ║  Session   : ${CONFIG.wahaSession.padEnd(40)}║
 ╚══════════════════════════════════════════════════════╝
   `);
+  try {
+    await initMCP();
+  } catch (err) {
+    console.error("❌ MCP init failed:", err.message);
+    process.exit(1);
+  }
 });
