@@ -21,6 +21,10 @@ const CONFIG = {
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.ANTHROPIC_API_KEY,
+  defaultHeaders: {
+    "HTTP-Referer": `https://${process.env.REPLY_DOMAIN || "reply.naetalab.com"}`,
+    "X-Title": "Competitor Analysis Bot",
+  },
 });
 
 // ─── MCP Client (initialized once at startup) ─────────────────────────────────

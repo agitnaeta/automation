@@ -12,6 +12,10 @@ const PORT = process.env.PORT || 3000;
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.ANTHROPIC_API_KEY,
+  defaultHeaders: {
+    "HTTP-Referer": `https://${process.env.AVAIL_ROOM_DOMAIN || "avail.localhost"}`,
+    "X-Title": "Avail Room",
+  },
 });
 
 // ─── MCP Client (initialized once at startup) ─────────────────────────────────
