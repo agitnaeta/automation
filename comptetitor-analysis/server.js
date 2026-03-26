@@ -71,7 +71,7 @@ async function askOpenRouter(systemPrompt, userMessage) {
 
   while (true) {
     const response = await openai.chat.completions.create({
-      model: "anthropic/claude-opus-4.6",
+      model: "x-ai/grok-4.1-fast",
       max_tokens: 1024,
       tools: mcpTools.length > 0 ? mcpTools : undefined,
       messages,

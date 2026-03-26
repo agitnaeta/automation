@@ -84,7 +84,7 @@ If no dates given, ask the customer to include a date range.`,
   // Agentic loop: keep going until stop (no more tool calls)
   while (true) {
     const response = await openai.chat.completions.create({
-      model: "anthropic/claude-opus-4.6",
+      model: "x-ai/grok-4.1-fast",
       max_tokens: 1024,
       tools: mcpTools,
       messages,
