@@ -4,11 +4,43 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import "dotenv/config";
 
-const app = express();
-app.use(express.json());
-
+// ─── Constants ────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
+// LLM
+const MODEL = "x-ai/grok-4.1-fast";
+const MAX_TOKENS = 1024;
+const MAX_TOOL_ITERATIONS = 10; // safety cap to prevent infinite loops
+
+// Query limits (kept in one place so prompt + any future code stay in sync)
+const LIMIT = {
+  LISTINGS: 5,
+  CALENDAR: 30, // LISTINGS * max_nights (5 × 6)
+  RESERVATIONS: 5,
+  RESULTS: 3,   // max results shown to customer
+};
+
+// DB tables
+const TABLE = {
+  LISTINGS:     "guesty_listings",
+  CALENDAR:     "guesty_calendar",
+  RESERVATIONS: "guesty_reservations",
+};
+
+// Columns to SELECT per table (never SELECT *)
+const COLUMNS = {
+  LISTINGS:     "id, title, location, bedrooms, base_price, currency, min_nights",
+  CALENDAR:     "listing_id, date, price, status",
+  RESERVATIONS: "listing_id",
+};
+
+// Reservation statuses that block availability
+const BLOCKING_STATUSES = ["confirmed", "inquiry", "blocked"];
+
+// MCP client identity
+const MCP_CLIENT_INFO = { name: "avail-room", version: "1.0.0" };
+
+// ─── Clients ──────────────────────────────────────────────────────────────────
 const openai = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -18,121 +50,152 @@ const openai = new OpenAI({
   },
 });
 
-// ─── MCP Client (initialized once at startup) ─────────────────────────────────
+// ─── MCP State ────────────────────────────────────────────────────────────────
 let mcpClient = null;
 let mcpTools = [];
 
 async function initMCP() {
-  const projectRef = process.env.SUPABASE_PROJECT_REF;
-  if (!projectRef) throw new Error("SUPABASE_PROJECT_REF is required");
-  if (!process.env.SUPABASE_ACCESS_TOKEN) throw new Error("SUPABASE_ACCESS_TOKEN is required");
+  const { SUPABASE_PROJECT_REF, SUPABASE_ACCESS_TOKEN } = process.env;
+  if (!SUPABASE_PROJECT_REF) throw new Error("SUPABASE_PROJECT_REF is required");
+  if (!SUPABASE_ACCESS_TOKEN) throw new Error("SUPABASE_ACCESS_TOKEN is required");
 
   const transport = new StdioClientTransport({
     command: "npx",
-    args: ["@supabase/mcp-server-supabase", "--project-ref", projectRef, "--read-only"],
-    env: {
-      ...process.env,
-      SUPABASE_ACCESS_TOKEN: process.env.SUPABASE_ACCESS_TOKEN,
-    },
+    args: ["@supabase/mcp-server-supabase", "--project-ref", SUPABASE_PROJECT_REF, "--read-only"],
+    env: { ...process.env, SUPABASE_ACCESS_TOKEN },
   });
 
-  mcpClient = new Client({ name: "avail-room", version: "1.0.0" }, { capabilities: {} });
+  mcpClient = new Client(MCP_CLIENT_INFO, { capabilities: {} });
   await mcpClient.connect(transport);
 
   const { tools } = await mcpClient.listTools();
-  // Convert MCP tool schema → OpenAI tool format
-  mcpTools = tools.map((t) => ({
+  mcpTools = tools.map(({ name, description, inputSchema }) => ({
     type: "function",
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.inputSchema,
-    },
+    function: { name, description, parameters: inputSchema },
   }));
 
-  console.log(`✅ MCP connected. Tools: ${mcpTools.map((t) => t.function.name).join(", ")}`);
+  console.log(`✅ MCP connected — tools: ${mcpTools.map((t) => t.function.name).join(", ")}`);
 }
 
-// ─── OpenRouter + MCP tool loop ───────────────────────────────────────────────
-async function askClaude(userMessage) {
+// ─── System Prompt ────────────────────────────────────────────────────────────
+function buildSystemPrompt() {
   const today = new Date().toISOString().split("T")[0];
 
+  return `You are a villa availability assistant. Today is ${today}.
+
+## Hard Query Rules
+- NEVER SELECT * — only SELECT the columns listed below per table.
+- ALWAYS enforce these LIMITs: ${TABLE.LISTINGS} → LIMIT ${LIMIT.LISTINGS}, ${TABLE.CALENDAR} → LIMIT ${LIMIT.CALENDAR}, ${TABLE.RESERVATIONS} → LIMIT ${LIMIT.RESERVATIONS}.
+- Filter with WHERE in SQL — never pull all rows and filter in memory.
+- NEVER wrap SQL in markdown, code blocks, or backticks.
+- ONLY query these three tables — no others exist:
+  • ${TABLE.LISTINGS}(${COLUMNS.LISTINGS})
+  • ${TABLE.CALENDAR}(${COLUMNS.CALENDAR})
+  • ${TABLE.RESERVATIONS}(listing_id, id, status, check_in_date, check_out_date)
+
+## Availability Flow
+1. Parse intent: check_in, check_out, bedrooms, location.
+   → If dates are missing, ask the customer for them and STOP — do not query anything.
+
+2. Fetch matching listings (one query):
+   SELECT ${COLUMNS.LISTINGS}
+   FROM ${TABLE.LISTINGS}
+   WHERE bedrooms = {n} AND location ILIKE '%{loc}%'
+   LIMIT ${LIMIT.LISTINGS}
+
+3. Check availability in two batched queries using ALL listing IDs at once:
+   a) Calendar — all nights must be 'available':
+      SELECT ${COLUMNS.CALENDAR}
+      FROM ${TABLE.CALENDAR}
+      WHERE listing_id = ANY('{id1,id2,...}'::uuid[])
+        AND date BETWEEN '{check_in}' AND '{check_out}'::date - 1
+        AND status = 'available'
+      LIMIT ${LIMIT.CALENDAR}
+
+   b) Blocking reservations:
+      SELECT ${COLUMNS.RESERVATIONS}
+      FROM ${TABLE.RESERVATIONS}
+      WHERE listing_id = ANY('{id1,id2,...}'::uuid[])
+        AND status IN (${BLOCKING_STATUSES.map((s) => `'${s}'`).join(", ")})
+        AND check_in_date < '{check_out}' AND check_out_date > '{check_in}'
+      LIMIT ${LIMIT.RESERVATIONS}
+
+4. A listing is available only if:
+   - ALL nights in range appear in ${TABLE.CALENDAR} with status = 'available', AND
+   - No row returned in the reservations query for that listing_id.
+
+5. Present at most ${LIMIT.RESULTS} available results — do not fetch more listings once ${LIMIT.RESULTS} are found.
+   Use ${TABLE.CALENDAR}.price for nightly rate; fall back to ${TABLE.LISTINGS}.base_price if null.
+   If fewer than ${LIMIT.RESULTS} found, say so — never fabricate availability.
+
+## Reply Format (WhatsApp only)
+Use only *bold* and _italic_. No headers, tables, bullet lists, or code blocks.
+Include: villa name, location, price/night, total for stay.`;
+}
+
+// ─── Tool Executor ────────────────────────────────────────────────────────────
+async function executeTool({ id, function: { name, arguments: rawArgs } }) {
+  const args = JSON.parse(rawArgs);
+  console.log(`🔧 [${name}]`, JSON.stringify(args));
+
+  try {
+    const result = await mcpClient.callTool({ name, arguments: args });
+    const content = Array.isArray(result.content)
+      ? result.content.map((c) => (typeof c === "object" ? JSON.stringify(c) : c)).join("\n")
+      : JSON.stringify(result.content);
+    return { role: "tool", tool_call_id: id, content };
+  } catch (err) {
+    console.error(`❌ Tool error [${name}]:`, err.message);
+    return { role: "tool", tool_call_id: id, content: `Error: ${err.message}` };
+  }
+}
+
+// ─── Agentic Loop ─────────────────────────────────────────────────────────────
+async function askClaude(userMessage) {
   const messages = [
-    {
-      role: "system",
-      content: `You are a villa availability assistant. Today is ${today}.
-Use the Supabase tools to answer availability queries. Follow this flow:
-1. Parse the customer's intent: check_in, check_out, bedrooms, location.
-2. Query guesty_listings filtered by bedrooms and/or location as needed.
-3. If dates given, check guesty_calendar for status = 'available' on each date in the range for the listing_id, OR exclude listing_ids that appear in guesty_reservations with overlapping check_in_date/check_out_date and status IN ('confirmed','inquiry','blocked').
-4. Use guesty_calendar.price for nightly price. Fall back to guesty_listings.base_price if calendar price is null.
-5. Reply in WhatsApp format: only *bold* and _italic_ — no headers, tables, lists, or code blocks.
-6. Include villa name (guesty_listings.title), location, price per night, and total for the stay.
-7. IMPORTANT: When calling tools, always pass raw SQL strings — never wrap queries in markdown code blocks or backticks.
-8. ONLY query these three tables. Never use listings, addresses, pricing, or any other table name.
-
-Key tables (ONLY these three exist):
-- guesty_listings: id, title, location, bedrooms, bathrooms, accommodates, min_nights, base_price, currency
-- guesty_calendar: date, listing_id, price, status (available|booked), reservation_id
-- guesty_reservations: id, listing_id, status, check_in_date, check_out_date
-
-If no dates given, ask the customer to include a date range.`,
-    },
+    { role: "system", content: buildSystemPrompt() },
     { role: "user", content: userMessage },
   ];
 
-  // Agentic loop: keep going until stop (no more tool calls)
-  while (true) {
-    const response = await openai.chat.completions.create({
-      model: "x-ai/grok-4.1-fast",
-      max_tokens: 1024,
+  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const { choices } = await openai.chat.completions.create({
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
       tools: mcpTools,
       messages,
     });
 
-    const choice = response.choices[0];
+    const { finish_reason, message } = choices[0];
 
-    if (choice.finish_reason === "stop") {
-      return choice.message.content?.trim() ?? "";
+    if (finish_reason === "stop") {
+      return message.content?.trim() ?? "";
     }
 
-    if (choice.finish_reason === "tool_calls") {
-      // Append assistant message with tool calls
-      messages.push(choice.message);
-
-      // Execute all tool calls against MCP server
-      const toolResults = await Promise.all(
-        choice.message.tool_calls.map(async (toolCall) => {
-          const args = JSON.parse(toolCall.function.arguments);
-          console.log(`🔧 MCP call: ${toolCall.function.name}`, JSON.stringify(args));
-          try {
-            const result = await mcpClient.callTool({
-              name: toolCall.function.name,
-              arguments: args,
-            });
-            const content = Array.isArray(result.content)
-              ? result.content.map((c) => (typeof c === "object" ? JSON.stringify(c) : c)).join("\n")
-              : JSON.stringify(result.content);
-            return { role: "tool", tool_call_id: toolCall.id, content };
-          } catch (err) {
-            return { role: "tool", tool_call_id: toolCall.id, content: `Error: ${err.message}` };
-          }
-        })
-      );
-
+    if (finish_reason === "tool_calls") {
+      messages.push(message);
+      const toolResults = await Promise.all(message.tool_calls.map(executeTool));
       messages.push(...toolResults);
+      continue;
     }
+
+    // Unexpected finish reason
+    console.warn(`⚠️ Unexpected finish_reason: ${finish_reason}`);
+    break;
   }
+
+  throw new Error("Exceeded max tool iterations — possible loop detected");
 }
 
-// ─── Endpoints ────────────────────────────────────────────────────────────────
-// POST /availability  { "message": "Available 2BR villas March 15-20?" }
+// ─── Express App ──────────────────────────────────────────────────────────────
+const app = express();
+app.use(express.json());
+
 app.post("/availability", async (req, res) => {
   const { message } = req.body;
+
   if (!message?.trim()) {
     return res.status(400).json({ error: "message is required" });
   }
-
   if (!mcpClient) {
     return res.status(503).json({ error: "MCP not ready yet" });
   }
@@ -141,7 +204,7 @@ app.post("/availability", async (req, res) => {
     const reply = await askClaude(message);
     res.json({ reply });
   } catch (err) {
-    console.error("Error:", err.message);
+    console.error("❌ /availability error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -150,9 +213,9 @@ app.get("/health", (_req, res) =>
   res.json({ status: "ok", mcp: mcpClient ? "connected" : "not ready" })
 );
 
-// ─── Start ────────────────────────────────────────────────────────────────────
+// ─── Startup ──────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
-  console.log(`avail-room API running on port ${PORT}`);
+  console.log(`🚀 avail-room running on port ${PORT}`);
   try {
     await initMCP();
   } catch (err) {
