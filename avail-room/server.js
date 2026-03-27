@@ -1,5 +1,4 @@
 import express from "express";
-import OpenAI from "openai";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import "dotenv/config";
@@ -8,9 +7,20 @@ import "dotenv/config";
 const PORT = process.env.PORT || 3000;
 
 // LLM
-const MODEL = "x-ai/grok-4.1-fast";
+const MODEL  = "x-ai/grok-4.1-fast";       // primary
+const MODELS = [MODEL, "openai/gpt-oss-120b"]; // fallback
 const MAX_TOKENS = 1024;
 const MAX_TOOL_ITERATIONS = 10; // safety cap to prevent infinite loops
+
+// OpenRouter provider routing (docs: openrouter.ai/docs/guides/routing/provider-selection)
+// `only` pins to xAI directly — correct field, not `order`
+// `data_collection: "allow"` overrides the inherited "Free Publication Disallowed"
+//   account policy per-request — this is the actual fix for the 404
+const PROVIDER = {
+  only: ["xAI", "OpenAI"],
+  data_collection: "allow",
+  allow_fallbacks: true,
+};
 
 // Query limits (kept in one place so prompt + any future code stay in sync)
 const LIMIT = {
@@ -40,15 +50,14 @@ const BLOCKING_STATUSES = ["confirmed", "inquiry", "blocked"];
 // MCP client identity
 const MCP_CLIENT_INFO = { name: "avail-room", version: "1.0.0" };
 
-// ─── Clients ──────────────────────────────────────────────────────────────────
-const openai = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  defaultHeaders: {
-    "HTTP-Referer": `https://${process.env.AVAIL_ROOM_DOMAIN || "avail.localhost"}`,
-    "X-Title": "Avail Room",
-  },
-});
+// ─── OpenRouter Config ────────────────────────────────────────────────────────
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const OPENROUTER_HEADERS = {
+  "Content-Type": "application/json",
+  "Authorization": `Bearer ${process.env.ANTHROPIC_API_KEY}`,
+  "HTTP-Referer": `https://${process.env.AVAIL_ROOM_DOMAIN || "avail.naetalab.com"}`,
+  "X-Title": "Avail Room",
+};
 
 // ─── MCP State ────────────────────────────────────────────────────────────────
 let mcpClient = null;
@@ -158,13 +167,24 @@ async function askClaude(userMessage) {
   ];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-    const { choices } = await openai.chat.completions.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      tools: mcpTools,
-      messages,
+    const res = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: OPENROUTER_HEADERS,
+      body: JSON.stringify({
+        models: MODELS,
+        max_tokens: MAX_TOKENS,
+        provider: PROVIDER,
+        tools: mcpTools,
+        messages,
+      }),
     });
 
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(`OpenRouter ${res.status}: ${JSON.stringify(err)}`);
+    }
+
+    const { choices } = await res.json();
     const { finish_reason, message } = choices[0];
 
     if (finish_reason === "stop") {
@@ -191,17 +211,17 @@ const app = express();
 app.use(express.json());
 
 app.post("/availability", async (req, res) => {
-  const { message } = req.body;
+  const { chatInput } = req.body;
 
-  if (!message?.trim()) {
-    return res.status(400).json({ error: "message is required" });
+  if (!chatInput?.trim()) {
+    return res.status(400).json({ error: "chatInput is required" });
   }
   if (!mcpClient) {
     return res.status(503).json({ error: "MCP not ready yet" });
   }
 
   try {
-    const reply = await askClaude(message);
+    const reply = await askClaude(chatInput);
     res.json({ reply });
   } catch (err) {
     console.error("❌ /availability error:", err.message);
